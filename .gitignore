@@ -3,3 +3,5 @@ venv/
 *.docx
 embeddings.npy
 chunks.json
+__pycache__/
+.env
