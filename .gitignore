@@ -1,3 +1,5 @@
 venv/
 *.pdf
 *.docx
+embeddings.npy
+chunks.json
