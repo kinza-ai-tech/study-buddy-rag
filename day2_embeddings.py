@@ -10,18 +10,44 @@ Run (same folder as day1_pdf_chunker.py):
     python day2_embeddings.py daa.pdf
 """
 
+import os
 import sys
 import json
 import numpy as np                                   # numbers/maths library
 from sentence_transformers import SentenceTransformer  # makes embeddings
 
 # We reuse the functions you built on Day 1
-from day1_pdf_chunker import load_pdf, split_into_chunks
+from day1_pdf_chunker import load_pdf, split_into_chunks, clean_text
 
 # A small, free model that runs on your own laptop (no API key needed).
 # It is downloaded automatically the first time (~90 MB).
 MODEL_NAME = "all-MiniLM-L6-v2"
 
+
+
+# ---------------------------------------------------------------
+# NEW: load the text Gemini read from the PDF's images
+# (created by day4_read_images.py). If the file does not exist,
+# we simply skip this and use the normal text only.
+# ---------------------------------------------------------------
+def load_image_chunks(pdf_path):
+    notes_path = os.path.splitext(pdf_path)[0] + "_image_notes.json"
+    if not os.path.exists(notes_path):
+        return []
+
+    with open(notes_path, encoding="utf-8") as f:
+        notes = json.load(f)
+
+    pages = []
+    for note in notes.values():
+        text = note["text"].strip()
+        if text and text != "DECORATION":          # ignore logos/decorations
+            pages.append((note["page"], clean_text(text)))
+
+    image_chunks = split_into_chunks(pages)        # same chunking as normal text
+    for chunk in image_chunks:
+        chunk["text"] = "(from an image on this page) " + chunk["text"]
+    return image_chunks
 
 # ---------------------------------------------------------------
 # STEP 1: Build the "index" = chunks + their embeddings
@@ -29,6 +55,7 @@ MODEL_NAME = "all-MiniLM-L6-v2"
 def build_index(pdf_path):
     pages = load_pdf(pdf_path)               # Day 1: read the PDF
     chunks = split_into_chunks(pages)        # Day 1: cut into chunks
+    chunks += load_image_chunks(pdf_path)    # NEW: add text read from images
 
     model = SentenceTransformer(MODEL_NAME)  # load the embedding model
 

@@ -25,10 +25,21 @@ from day2_embeddings import build_index, search
 # ---------------------------------------------------------------
 # SETTINGS (easy to change)
 # ---------------------------------------------------------------
-GEMINI_MODEL = "gemini-3.8-flash"   # if this name gives a 404 error, list the
-                                    # models available to your key and change it
+# Models are tried in this order. If the first one is busy or out of daily
+# quota, the app automatically tries the next one (each model has its own limit).
+GEMINI_MODELS = ["gemini-3.7-flash", "gemini-3.6-flash"]
 TOP_K = 6                           # how many chunks we send to Gemini
 MIN_SCORE = 0.20                    # below this, we say "not found"
+PAGE_OFFSET = 5                     # PDF page 6 = printed page 1, so 6 - 1 = 5
+                                    # set to 0 if your PDF has no extra front pages
+
+
+def page_label(pdf_page):
+    """Show the PDF page and, when it exists, the printed page number."""
+    printed = pdf_page - PAGE_OFFSET
+    if PAGE_OFFSET > 0 and printed >= 1:
+        return f"PDF page {pdf_page} / printed page {printed}"
+    return f"PDF page {pdf_page}"
 
 
 # ---------------------------------------------------------------
@@ -53,14 +64,15 @@ client = genai.Client(api_key=api_key)          # connection to Gemini
 def make_prompt(question, results):
     context = ""
     for chunk, score in results:
-        context += f"[Page {chunk['page']}]\n{chunk['text']}\n\n"
+        context += f"[{page_label(chunk['page'])}]\n{chunk['text']}\n\n"
 
     return f"""You are a study assistant. Answer the question using ONLY
 the context below, which comes from the student's document.
 
 Rules:
 - Explain in simple, clear language.
-- Mention the page number(s) you used, like (page 2).
+- Mention the page label(s) you used, exactly as written in the
+  brackets, like (PDF page 14 / printed page 9).
 - If the answer is not in the context, say exactly:
   "I couldn't find this in the document."
 - Do not use outside knowledge.
@@ -70,6 +82,44 @@ CONTEXT:
 QUESTION: {question}
 
 ANSWER:"""
+
+
+def ask_gemini(prompt):
+    """Try each model in GEMINI_MODELS. Returns (text, error); one is None."""
+    last_error = ""
+    for model_name in GEMINI_MODELS:
+        for attempt in range(1, 3):                 # 2 tries per model
+            try:
+                response = client.models.generate_content(
+                    model=model_name,
+                    contents=prompt,
+                )
+                text = response.text
+                if text and text.strip():
+                    if model_name != GEMINI_MODELS[0]:
+                        text += f"\n\n(answered by backup model {model_name})"
+                    return text, None
+                last_error = "Gemini returned an empty reply."
+                break                               # try the next model
+            except Exception as error:
+                message = str(error)
+                last_error = message
+                if "PerDay" in message:             # daily quota: next model
+                    print(f"Daily limit reached for {model_name}.")
+                    break
+                if "404" in message or "NOT_FOUND" in message:
+                    print(f"Model {model_name} is not available. Trying the next one.")
+                    break
+                if "503" in message or "429" in message or "UNAVAILABLE" in message:
+                    if attempt < 2:
+                        print(f"{model_name} is busy. Retrying in 10s...")
+                        time.sleep(10)
+                        continue
+                    print(f"{model_name} is still busy.")
+                    break
+                return None, f"Gemini error: {message}"   # any other error: stop
+    return None, ("All models are busy or out of daily quota. Try again later. "
+                  "Last error: " + last_error[:200])
 
 
 # ---------------------------------------------------------------
@@ -86,25 +136,10 @@ def answer_question(question, model, chunks, embeddings):
 
     prompt = make_prompt(question, results)
 
-    # Gemini is sometimes busy (error 503) or rate-limited (error 429).
-    # These are temporary, so we wait a little and try again (up to 3 times).
-    for attempt in range(1, 4):
-        try:
-            response = client.models.generate_content(
-                model=GEMINI_MODEL,
-                contents=prompt,
-            )
-            return response.text, results
-        except Exception as error:
-            message = str(error)
-            is_busy = "503" in message or "429" in message or "UNAVAILABLE" in message
-            if is_busy and attempt < 3:
-                wait = 5 * attempt          # wait 5 seconds, then 10
-                print(f"Gemini is busy. Retrying in {wait}s (attempt {attempt}/3)...")
-                time.sleep(wait)
-                continue
-            # Shows the real reason (wrong key, wrong model name, quota...)
-            return f"Gemini error: {error}", results
+    text, error = ask_gemini(prompt)
+    if error:
+        return error, results
+    return text, results
 
 
 # ---------------------------------------------------------------
@@ -130,5 +165,5 @@ if __name__ == "__main__":
 
         print("\n--- SOURCES USED ---")
         for chunk, score in results:
-            print(f"page {chunk['page']}  (score {score:.2f})")
+            print(f"{page_label(chunk['page'])}  (score {score:.2f})")
         print()

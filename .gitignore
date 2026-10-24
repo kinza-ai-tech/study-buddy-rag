@@ -5,3 +5,7 @@ embeddings.npy
 chunks.json
 __pycache__/
 .env
+*_image_notes.json
+*_image_notes.json
+*_image_notes.json
+*_image_notes.json
